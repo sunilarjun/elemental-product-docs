@@ -1,12 +1,12 @@
-name: Generate Alfa Accessibility Report
+name: Accessibility Report
 
 on:
   pull_request:
-    # Only run the workflow if files within the 'docs/' directory are modified
     paths:
       - 'docs/**'
-      - 'versions/**'
-    types: [opened, edited, synchronize, reopened]
+      - 'versions/**' 
+    branches:
+      - main
 
 jobs:
   alfa_report:
@@ -15,40 +15,66 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-      
+        # Important: Fetch the target branch history for the git diff to work correctly
+        with:
+          fetch-depth: 0 
+          
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
           
       - name: Install Dependencies
-        # Assumes Antora, http-server, and the necessary Siteimprove Alfa packages
-        # (@siteimprove/alfa-cli, @siteimprove/alfa-scraper, etc.) are in package.json
         run: npm install 
 
-      # --- Phase 1: Build Antora Site ---
+      # --- 1. Identify Changed Files using Git ---
+      - name: Get Changed Asciidoc Files
+        id: changed-files-git
+        run: |
+          # 1. Compare the current PR commit (HEAD) with the base branch (e.g., main)
+          # 2. Filter the results to only include added (A), modified (M), or renamed (R) files
+          # 3. Filter the paths to only include .adoc files under docs/ or versions/
+          
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} HEAD \
+            --diff-filter=AMR -- '*.adoc' | \
+            grep -E '^(docs|versions)/.+\.adoc$' | tr '\n' ' ')
+          
+          # Set the list as an output variable for the next step
+          echo "changed_files_list=${CHANGED_FILES}" >> $GITHUB_OUTPUT
+          
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "No relevant Asciidoc files were modified. Skipping Alfa audit."
+            echo "skip_audit=true" >> $GITHUB_OUTPUT
+          else
+            echo "Files changed: $CHANGED_FILES"
+            echo "skip_audit=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Check if any .adoc files were changed. Exit if not.
+      - name: Skip Audit If No Asciidoc Changes
+        if: steps.changed-files-git.outputs.skip_audit == 'true'
+        run: exit 0
+      
+      # --- 2. Build Antora Site ---
       - name: Run Antora Build
-        # This converts Asciidoc to static HTML
         run: npx antora elemental-playbook-local.yml 
         
-      # --- Phase 2: Dynamic URL Setup ---
-      - name: Generate Alfa URLs List
-        # This executes the custom script (generate-alfa-urls.js) to find all HTML files
-        run: node generate-alfa-urls.js
+      # --- 3. Dynamic Targeted URL Setup ---
+      - name: Generate Targeted Alfa URLs List
+        # Pass the list of changed files from the previous step's output
+        env:
+          CHANGED_FILES: ${{ steps.changed-files-git.outputs.changed_files_list }}
+        run: node generate-alfa-urls-targeted.js
         
-      # --- Phase 3: Start Server and Run Audit ---
+      # --- 4. Start Server and Run Audit ---
       
       - name: Start Static Docs Server in Background
-        # Serve the generated HTML files for the Alfa scraper to access.
-        # Ensure the path (build/site) and port (8080) match your Antora build and script config.
         run: npx http-server build/site -p 8080 & 
 
       - name: Run Siteimprove Alfa Audit and Generate Report
-        # 1. Read URLs from the file created by the script (alfa-urls.txt).
-        # 2. Use the Alfa CLI with the scrape command to test pages.
-        # 3. Output the results to a structured JSON file.
         run: |
           URL_LIST=$(cat alfa-urls.txt)
+          echo "Auditing the following URLs: $URL_LIST"
           npx @siteimprove/alfa-cli audit --urls $URL_LIST --json > alfa-report.json || true
         
       - name: Upload Alfa Report Artifact
