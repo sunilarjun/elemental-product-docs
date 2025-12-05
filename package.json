@@ -6,6 +6,8 @@
   },
   "dependencies": {
     "@antora/lunr-extension": "^1.0.0-alpha.8",
+    "@siteimprove/alfa-cli": "^0.80.5",
+    "@siteimprove/alfa-scraper": "^0.80.5",
     "@springio/antora-xref-extension": "^1.0.0-alpha.4",
     "asciidoctor-kroki": "^0.18.1",
     "semver": "^7.7.3"
